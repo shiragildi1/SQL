@@ -1,0 +1,244 @@
+drop table votes;
+drop table running;
+drop table party;
+drop table city;
+drop table election;
+
+--shira giladi
+
+----------------------------------------------------------------------------------
+------------------------a-------------------------------------------------
+-- יצירת טבלת election
+create table election
+(edate date,
+ kno int,
+ primary key (edate));
+---------------------------------------------------------------------------------
+-- יצירת טבלת party
+create table party
+(pname char(20),
+ symbol char(5),
+ primary key (pname));
+------------------------------------------------------------------------------------
+-- יצירת טבלת city
+create table city
+(cid numeric(5,0),
+ cname varchar(20),
+ region varchar(20),
+ primary key (cid));
+------------------------------------------------------------------------------------ 
+-- יצירת טבלת running
+create table running
+(edate date,
+ pname char(20),
+ chid numeric(5,0),
+ totalvotes int default 0,
+ primary key (edate, pname, chid),
+ foreign key (edate) references election,
+ foreign key (pname) references party);
+------------------------------------------------------------------------------------
+-- יצירת טבלת votes
+create table votes
+(cid numeric(5,0),
+ pname char(20),
+ edate date,
+ nofvotes int,
+ primary key (cid, pname, edate),
+ foreign key (cid) references city,
+ foreign key (pname) references party,
+ foreign key (edate) references election);
+---------------------b------------------------------------------------
+CREATE OR REPLACE FUNCTION trigf1() RETURNS TRIGGER AS
+$$
+DECLARE totalvotes record;
+BEGIN
+	SELECT * into totalvotes
+	FROM running
+	WHERE running.pname = NEW.pname AND running.edate = NEW.edate;
+	IF totalvotes is not null then
+	BEGIN
+		UPDATE running
+		SET totalvotes = new.nofvotes + totalvotes.totalvotes
+		WHERE running.pname = NEW.pname AND running.edate = NEW.edate;
+	END;
+	RETURN NEW;
+	ELSE
+		IF TG_NAME = 'insert' then 
+			return null;
+		ELSE
+			return old;
+		END IF;
+	END IF;
+END;
+$$
+language plpgsql;
+create trigger T1
+before insert or update
+on votes
+for each row
+EXECUTE FUNCTION trigf1();
+-----------------------------c------------------------------------------------------
+-- הכנסת נתונים לטבלת election
+insert into election 
+values('2019.04.09',1),
+('2019.09.17',2),
+('2020.03.02',3),
+('2021.03.23',4),
+('2022.11.01',5);
+-- הצגת תוכן טבלת election
+select * from election;
+----------------------------------------------------------------------------------
+-- הכנסת נתונים לטבלת party
+insert into party 
+values('nature party','np'),
+('science group','sg'),
+('life party','lp'),
+('art group', 'ag'),
+('lost group','lg');
+-- הצגת תוכן טבלת party
+select * from party;
+------------------------------------------------------------------------------------
+-- הכנסת נתונים לטבלת city
+insert into city 
+values(22,'ryde end','north'),
+(77,'east strat','south'),
+(33,'grandetu','center'),
+(88,'royalpre','hills'),
+(11,'carlpa','hills'),
+(44,'lommont','north'),
+(66,'grand sen','south'),
+(99,'kingo haven','hills'),
+(55,'el munds', 'south');
+-- הצגת תוכן טבלת city
+select * from city;
+------------------------------------------------------------------------------------
+-- הכנסת נתונים לטבלת running
+insert into running
+values('2019.04.09','nature party','12345'),
+('2019.04.09', 'life party', '54321'),
+('2019.04.09', 'lost group', '34567'),
+('2019.09.17', 'lost group', '76543'),
+('2019.09.17', 'art group', '67890'),
+('2020.03.02', 'science group', '90876'),
+('2020.03.02','nature party','55555'),
+('2020.03.02','life party','54321');
+-- הצגת תוכן טבלת running
+select * from running;
+------------------------------------------------------------------------------------
+-- הכנסת נתונים לטבלת votes
+insert into votes
+values('22','nature party', '2020.03.02' , 100),
+('22','science group', '2020.03.02',  30),
+('22','life party', '2020.03.02',  500),
+('77','nature party', '2020.03.02',  300),
+('77','science group', '2020.03.02', 150),
+('77','life party', '2020.03.02', 25),
+('33','nature party', '2020.03.02',  13),
+('33', 'science group', '2020.03.02', 740),
+('33','life party', '2020.03.02',  670);
+-- הצגת תוכן טבלת votes
+select * from votes;
+-------------------------d--------------------------------------------------
+select * from running--בדיקה שהטריגר עדכן לי את הנתונים הנדרשים
+----------------------------------------------------------------------------------
+--d1
+select pname, nofvotes
+from votes natural join city
+where edate = '2.3.2020' and cname = 'ryde end';
+-----------------------------------------------------------------------------------
+--d2
+select pname,region,sum(nofvotes) as sumvotes
+from election natural join votes natural join city
+where kno = 3
+group by pname,region, nofvotes;
+-----------------------------------------------------------------------------------
+--d3
+select cname,region
+from city
+except
+select cname,region
+from city natural join votes 
+where pname = 'life party';
+-----------------------------------------------------------------------------------
+--d4
+SELECT edate ,kno
+FROM election natural join running 
+GROUP BY edate, kno
+HAVING COUNT(pname) >= ALL
+(
+    SELECT count(pname)
+    FROM election natural join running
+    GROUP BY kno
+ ); 
+-----------------------------------------------------------------------------------
+--d5
+with mv(pname, sv)as
+(
+	select pname, sum(nofvotes)as sv
+	from election natural join votes natural join party
+	where kno = 3
+	and pname not in
+	(
+		select pname
+		from votes natural join city
+		where cname = 'hills'
+	)
+	group by pname
+)
+select pname
+from mv
+where sv <= ALL
+(
+	 select min(sv)
+	 from mv
+);
+------------------------------------------------------------------------------------
+--d6
+select pname
+from running natural join election
+where totalvotes = ALL 
+(
+	select max(totalvotes)
+	from running natural join election 
+	where totalvotes < ALL 
+	(
+		select max(totalvotes)
+		from running natural join election
+		where kno = 3
+	)
+	AND kno = 3
+)
+AND kno = 3; 
+------------------------------------------------------------------------------------
+--d7
+select distinct party1.pname, party2.pname
+from running party1, running party2
+where party1.edate = party2.edate
+and party1.pname < party2.pname
+and not exists
+(
+	(select party.edate
+ 	 from running party
+ 	 where party1.pname = party.pname
+  	 except
+     select party.edate
+     from running party
+     where party2.pname = party.pname)
+  union
+	(select party.edate
+	 from running party
+	 where party2.pname = party.pname
+	 except
+	 select party.edate
+	 from running party
+	 where party1.pname = party.pname)
+);
+-------------------------------- end d ---------------------------------------------
+--------------------------------- thanks!!!----------------------------------------
+
+
+
+
+
+
+
